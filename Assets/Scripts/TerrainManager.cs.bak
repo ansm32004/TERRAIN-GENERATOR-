@@ -1,0 +1,513 @@
+using UnityEngine;
+using System.Collections.Generic;
+
+namespace YOLOGRAM
+{
+    public class TerrainManager : MonoBehaviour
+    {
+        public GameObject chunkPrefab;
+        public int viewDistance = 2;
+        public Transform player;
+        
+        [Header("Performance")]
+        [Tooltip("Maximum number of chunks to generate per frame")]
+        public int maxChunksPerFrame = 4;
+        [Range(2, 5)]
+        public int preloadDistance = 3;
+
+        [Header("Colors")]
+        public Color centerColor = Color.red;
+        public Color innerColor = Color.yellow;
+        public Color outerColor = Color.blue;
+
+        private Dictionary<Vector2Int, Chunk> loadedChunks = new();
+        private Vector2Int currentChunkCoord;
+        private Queue<Vector2Int> generationQueue = new();
+        private HashSet<Vector2Int> queuedChunks = new();
+        private Dictionary<int, MaterialPropertyBlock> mpbCache = new();
+
+        void Start()
+        {
+            if (player == null)
+            {
+                GameObject playerObj = GameObject.FindWithTag("Player");
+                if (playerObj != null) player = playerObj.transform;
+                else
+                {
+                    Debug.LogError("No Player with 'Player' tag found! Assign manually in Inspector.");
+                    return;
+                }
+            }
+
+            if (chunkPrefab == null)
+            {
+                Debug.LogError("Chunk prefab is missing! Please assign in Inspector.");
+                return;
+            }
+
+            // Initialize at player position
+            currentChunkCoord = Vector2Int.zero;
+            Vector3 centerPos = new Vector3(16f, 50f, 16f); // Half chunk size
+            player.position = centerPos;
+            
+            // Generate initial chunks
+            EnqueueSurroundingChunks(currentChunkCoord);
+            for (int i = 0; i < maxChunksPerFrame * 2; i++)
+            {
+                ProcessGenerationQueue();
+            }
+
+            // Snap player to ground
+            SnapPlayerToTerrain(centerPos);
+        }
+
+        void Update()
+        {
+            if (player == null) return;
+
+            Vector2Int playerChunk = Chunk.WorldToChunkCoord(player.position);
+            if (playerChunk != currentChunkCoord)
+            {
+                currentChunkCoord = playerChunk;
+                EnqueueSurroundingChunks(playerChunk);
+            }
+
+            ProcessGenerationQueue();
+            CleanupDistantChunks();
+            UpdateChunkColors();
+        }
+
+        private void EnqueueSurroundingChunks(Vector2Int center)
+        {
+            for (int x = -preloadDistance; x <= preloadDistance; x++)
+            {
+                for (int z = -preloadDistance; z <= preloadDistance; z++)
+                {
+                    Vector2Int coord = new Vector2Int(center.x + x, center.y + z);
+                    if (!loadedChunks.ContainsKey(coord) && !queuedChunks.Contains(coord))
+                    {
+                        queuedChunks.Add(coord);
+                        generationQueue.Enqueue(coord);
+                    }
+                }
+            }
+        }
+
+        private void ProcessGenerationQueue()
+        {
+            int chunksGenerated = 0;
+            while (generationQueue.Count > 0 && chunksGenerated < maxChunksPerFrame)
+            {
+                Vector2Int coord = generationQueue.Dequeue();
+                if (!loadedChunks.ContainsKey(coord))
+                {
+                    GenerateChunk(coord);
+                    chunksGenerated++;
+                }
+                queuedChunks.Remove(coord);
+            }
+        }
+
+        private void CleanupDistantChunks()
+        {
+            List<Vector2Int> toRemove = new List<Vector2Int>();
+            foreach (var chunk in loadedChunks)
+            {
+                if (Vector2.Distance(chunk.Key, currentChunkCoord) > preloadDistance + 2)
+                {
+                    toRemove.Add(chunk.Key);
+                }
+            }
+
+            foreach (var coord in toRemove)
+            {
+                if (loadedChunks.TryGetValue(coord, out Chunk chunk))
+                {
+                    Destroy(chunk.gameObject);
+                    loadedChunks.Remove(coord);
+                }
+            }
+        }
+
+        private void GenerateChunk(Vector2Int coord)
+        {
+            if (chunkPrefab == null) return;
+
+            GameObject chunkObj = Instantiate(chunkPrefab, transform);
+            chunkObj.name = $"Chunk_{coord.x}_{coord.y}";
+            
+            Chunk chunk = chunkObj.GetComponent<Chunk>();
+            if (chunk == null)
+            {
+                chunk = chunkObj.AddComponent<Chunk>();
+            }
+
+            chunk.Generate(coord, this);
+            loadedChunks[coord] = chunk;
+
+            float chunkSize = chunk.size;
+            chunkObj.transform.position = new Vector3(coord.x * chunkSize, 0, coord.y * chunkSize);
+        }
+
+        private void UpdateChunkColors()
+        {
+            foreach (var kv in loadedChunks)
+            {
+                if (kv.Value == null) continue;
+                
+                float dist = Vector2.Distance(kv.Key, currentChunkCoord);
+                Color color = dist <= 1 ? centerColor : 
+                            dist <= 2 ? innerColor : 
+                            outerColor;
+
+                var renderer = kv.Value.GetComponent<Renderer>();
+                if (renderer != null)
+                {
+                    MaterialPropertyBlock mpb = new MaterialPropertyBlock();
+                    renderer.GetPropertyBlock(mpb);
+                    mpb.SetColor("_Color", color);
+                    mpb.SetColor("_BaseColor", color);
+                    renderer.SetPropertyBlock(mpb);
+                }
+            }
+        }
+
+        public void SnapPlayerToTerrain(Vector3 abovePos)
+        {
+            if (player == null) return;
+            if (Physics.Raycast(abovePos, Vector3.down, out RaycastHit hit, 100f))
+            {
+                player.position = hit.point + Vector3.up;
+            }
+        }
+    }
+
+    [Header("Highlight Colors")]
+    public Color centerColor = Color.red;
+    public Color innerColor = Color.red;
+    public Color outerColor = Color.blue;
+
+    private Dictionary<Vector2Int, Chunk> loadedChunks = new();
+    private Vector2Int currentChunkCoord;
+    // Progressive generation queue for smooth loading
+    private Queue<Vector2Int> generationQueue = new();
+    private HashSet<Vector2Int> queuedChunks = new();
+    // Cache for rendering
+    private Dictionary<int, MaterialPropertyBlock> mpbCache = new();
+    private Dictionary<int, float> chunkFadeStates = new();
+    
+    [Header("Performance")]
+    [Tooltip("Maximum number of chunks to generate per frame")]
+    public int maxChunksPerFrame = 4;
+    [Range(2, 5)]
+    public int preloadDistance = 3;
+
+    void Start()
+    {
+        // Robust player find.
+        if (player == null)
+        {
+            GameObject playerObj = GameObject.FindWithTag("Player");
+            if (playerObj != null) player = playerObj.transform;
+            else
+            {
+                Debug.LogError("No Player with 'Player' tag found! Assign manually in Inspector.");
+                return; // Bail if no player.
+            }
+        }
+
+        // Robust prefab.
+        if (chunkPrefab == null)
+        {
+            GameObject tempPrefab = new GameObject("ChunkPrefab");
+            chunkPrefab = tempPrefab;
+            chunkPrefab.AddComponent<Chunk>();
+            DontDestroyOnLoad(chunkPrefab); // Keep prefab alive.
+        }
+
+        // Always start at center (0,0) and position player there
+        if (player != null)
+        {
+            // Place player at center of chunk (0,0)
+            float chunkSize = ChunkSize();
+            Vector3 centerPos = new Vector3(chunkSize * 0.5f, 50f, chunkSize * 0.5f);
+            player.position = centerPos;
+            
+            currentChunkCoord = Vector2Int.zero; // Start at origin chunk
+            UpdateChunks(); // Now safe.
+
+            // Snap to terrain after initial generation
+            SnapPlayerToTerrain(centerPos);
+        }
+    }
+
+    void Update()
+    {
+        if (player == null) return;
+
+        // Get current player chunk position
+        Vector2Int playerChunk = Chunk.WorldToChunkCoord(player.position);
+        
+        // Only update if player moved to a new chunk
+        if (playerChunk != currentChunkCoord)
+        {
+            currentChunkCoord = playerChunk;
+            EnqueueSurroundingChunks(playerChunk);
+        }
+
+        // Process chunk generation queue
+        int chunksGenerated = 0;
+        while (generationQueue.Count > 0 && chunksGenerated < maxChunksPerFrame)
+        {
+            Vector2Int coord = generationQueue.Dequeue();
+            if (!loadedChunks.ContainsKey(coord))
+            {
+                GenerateChunk(coord);
+                chunksGenerated++;
+            }
+            queuedChunks.Remove(coord);
+        }
+
+        // Clean up chunks that are too far away
+        CleanupDistantChunks();
+    }
+
+    private void EnqueueSurroundingChunks(Vector2Int center)
+    {
+        for (int x = -preloadDistance; x <= preloadDistance; x++)
+        {
+            for (int z = -preloadDistance; z <= preloadDistance; z++)
+            {
+                Vector2Int coord = new Vector2Int(center.x + x, center.y + z);
+                if (!loadedChunks.ContainsKey(coord) && !queuedChunks.Contains(coord))
+                {
+                    queuedChunks.Add(coord);
+                    generationQueue.Enqueue(coord);
+                }
+            }
+        }
+    }
+
+    private void CleanupDistantChunks()
+    {
+        List<Vector2Int> chunksToRemove = new List<Vector2Int>();
+        foreach (var chunk in loadedChunks)
+        {
+            float distance = Vector2.Distance(chunk.Key, currentChunkCoord);
+            if (distance > preloadDistance + 2)
+            {
+                chunksToRemove.Add(chunk.Key);
+            }
+        }
+
+        foreach (var coord in chunksToRemove)
+        {
+            if (loadedChunks.TryGetValue(coord, out Chunk chunk))
+            {
+                Destroy(chunk.gameObject);
+                loadedChunks.Remove(coord);
+            }
+        }
+    }
+
+    private void GenerateChunk(Vector2Int coord)
+    {
+        if (chunkPrefab == null) return;
+
+        // Create new chunk
+        GameObject chunkObj = Instantiate(chunkPrefab, transform);
+        chunkObj.name = $"Chunk_{coord.x}_{coord.y}";
+        
+        // Setup chunk component
+        Chunk chunk = chunkObj.GetComponent<Chunk>();
+        if (chunk == null)
+        {
+            chunk = chunkObj.AddComponent<Chunk>();
+        }
+
+        // Generate and track the chunk
+        chunk.Generate(coord, this);
+        loadedChunks[coord] = chunk;
+
+        // Position the chunk
+        float chunkSize = chunk.size;
+        chunkObj.transform.position = new Vector3(coord.x * chunkSize, 0, coord.y * chunkSize);
+    }
+    }
+
+    // Generate a square area of tiles centered on 'center' (includes diagonals)
+    private void GenerateCrossAround(Vector2Int center)
+    {
+        for (int x = -generationRange; x <= generationRange; x++)
+        {
+            for (int y = -generationRange; y <= generationRange; y++)
+            {
+                Vector2Int coord = new Vector2Int(center.x + x, center.y + y);
+                if (!loadedChunks.ContainsKey(coord)) GenerateChunk(coord);
+            }
+        }
+    }
+
+    // Enqueue missing chunks within the (possibly extended) area based on edge proximity
+    private void EnqueueNeededChunks(Vector2Int center)
+    {
+        // Determine local position of player within current chunk
+        Vector3 chunkOrigin = new Vector3(center.x * ChunkSize(), 0, center.y * ChunkSize());
+        Vector3 local = player.position - chunkOrigin; // 0..size range
+        float nx = (local.x / ChunkSize()) - 0.5f; // -0.5 .. 0.5 centered
+        float nz = (local.z / ChunkSize()) - 0.5f;
+
+        int minX = -generationRange;
+        int maxX = generationRange;
+        int minY = -generationRange;
+        int maxY = generationRange;
+
+        // If player is near an edge, extend generation further in that direction by 1
+        if (nx > edgePreGenerateThreshold) maxX += 1;
+        if (nx < -edgePreGenerateThreshold) minX -= 1;
+        if (nz > edgePreGenerateThreshold) maxY += 1;
+        if (nz < -edgePreGenerateThreshold) minY -= 1;
+
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int y = minY; y <= maxY; y++)
+            {
+                Vector2Int coord = new Vector2Int(center.x + x, center.y + y);
+                if (loadedChunks.ContainsKey(coord) || queuedSet.Contains(coord)) continue;
+                queuedSet.Add(coord);
+                generationQueue.Enqueue(coord);
+            }
+        }
+    }
+
+    private int ChunkSize()
+    {
+        // derive size from prefab if possible, else fall back to 32
+        if (chunkPrefab != null)
+        {
+            var chunkComp = chunkPrefab.GetComponent<Chunk>();
+            if (chunkComp != null) return Mathf.Max(1, chunkComp.size);
+        }
+        return 32;
+    }
+
+    private void ProcessGenerationQueue()
+    {
+        int spawned = 0;
+        while (generationQueue.Count > 0 && spawned < maxSpawnsPerFrame)
+        {
+            Vector2Int coord = generationQueue.Dequeue();
+            queuedSet.Remove(coord);
+            if (loadedChunks.ContainsKey(coord)) continue;
+            GenerateChunk(coord);
+            spawned++;
+        }
+    }
+
+    // Color chunks by distance from currentChunkCoord: center/inner/outer layers
+    private void UpdateChunkColors()
+    {
+        foreach (var kv in loadedChunks)
+        {
+            Vector2Int coord = kv.Key;
+            Chunk chunk = kv.Value;
+            if (chunk == null) continue;
+
+            float dist = Vector2.Distance(coord, currentChunkCoord);
+            Color targetColor = Color.white;
+            
+            // Simple distance-based coloring
+            if (dist <= 1) targetColor = centerColor;
+            else if (dist <= 2) targetColor = innerColor;
+            else targetColor = outerColor;
+
+            var renderer = chunk.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                MaterialPropertyBlock mpb = new MaterialPropertyBlock();
+                renderer.GetPropertyBlock(mpb);
+                mpb.SetColor("_Color", targetColor);
+                mpb.SetColor("_BaseColor", targetColor);
+                renderer.SetPropertyBlock(mpb);
+            }
+        }
+    }
+
+    private void GenerateChunk(Vector2Int coord)
+    {
+        if (chunkPrefab == null) return;
+
+        // Create new chunk
+        GameObject chunkObj = Instantiate(chunkPrefab, transform);
+        chunkObj.name = $"Chunk_{coord.x}_{coord.y}";
+        
+        // Setup chunk component
+        Chunk chunk = chunkObj.GetComponent<Chunk>();
+        if (chunk == null)
+        {
+            chunk = chunkObj.AddComponent<Chunk>();
+        }
+
+        // Generate and track the chunk
+        chunk.Generate(coord, this);
+        loadedChunks[coord] = chunk;
+
+        // Position the chunk
+        float chunkSize = chunk.size;
+        chunkObj.transform.position = new Vector3(coord.x * chunkSize, 0, coord.y * chunkSize);
+    }
+
+    private int ChunkSize()
+    {
+        // derive size from prefab if possible, else fall back to 32
+        if (chunkPrefab != null)
+        {
+            var chunkComp = chunkPrefab.GetComponent<Chunk>();
+            if (chunkComp != null) return Mathf.Max(1, chunkComp.size);
+        }
+        return 32;
+    }
+
+    private void UpdateChunkColors()
+    {
+        foreach (var kv in loadedChunks)
+        {
+            Vector2Int coord = kv.Key;
+            Chunk chunk = kv.Value;
+            if (chunk == null) continue;
+
+            float dist = Vector2.Distance(coord, currentChunkCoord);
+            Color targetColor = Color.white;
+            
+            // Simple distance-based coloring
+            if (dist <= 1) targetColor = centerColor;
+            else if (dist <= 2) targetColor = innerColor;
+            else targetColor = outerColor;
+
+            var renderer = chunk.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                MaterialPropertyBlock mpb = new MaterialPropertyBlock();
+                renderer.GetPropertyBlock(mpb);
+                mpb.SetColor("_Color", targetColor);
+                mpb.SetColor("_BaseColor", targetColor);
+                renderer.SetPropertyBlock(mpb);
+            }
+        }
+    }
+
+    public void SnapPlayerToTerrain(Vector3 abovePos)
+    {
+        if (player == null || !Physics.Raycast(abovePos, Vector3.down, out RaycastHit hit, 100f)) return;
+        player.position = hit.point + Vector3.up * 1f;
+    }
+    }
+}
+
+    public void SnapPlayerToTerrain(Vector3 abovePos)
+    {
+        if (player == null || !Physics.Raycast(abovePos, Vector3.down, out RaycastHit hit, 100f)) return;
+        player.position = hit.point + Vector3.up * 1f;
+    }
+    }
+}
