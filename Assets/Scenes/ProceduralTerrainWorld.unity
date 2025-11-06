@@ -164,13 +164,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TerrainManager
   chunkPrefab: {fileID: 3170568803997950130, guid: 75cc16fab6435234a9b55e78397ea2d8, type: 3}
-  viewDistance: 2
   player: {fileID: 1289620925}
-  maxChunksPerFrame: 4
-  preloadDistance: 3
-  centerColor: {r: 1, g: 0, b: 0, a: 1}
-  innerColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
-  outerColor: {r: 0, g: 0, b: 1, a: 1}
+  chunkSize: 32
+  rowWidth: 3
+  spawnDistance: 50
+  playerTileColor: {r: 1, g: 1, b: 1, a: 1}
+  rowColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+  oldColor: {r: 0, g: 0, b: 1, a: 1}
 --- !u!1 &861628878
 GameObject:
   m_ObjectHideFlags: 0
@@ -418,7 +418,7 @@ Transform:
   m_GameObject: {fileID: 1289620921}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: 0.008726558, z: -0, w: 0.999962}
-  m_LocalPosition: {x: -3.91, y: 0, z: -19.07}
+  m_LocalPosition: {x: -3.91, y: 0, z: 3.6}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
