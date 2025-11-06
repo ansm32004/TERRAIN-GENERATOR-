@@ -11,6 +11,10 @@ namespace YOLOGRAM
         public float chunkSize = 32f;   // match your prefab size
         public int viewRadius = 2;      // how far around player to keep generating
 
+        [Header("Tree Prefabs")]
+        public GameObject cylinderTreePrefab; // LOD 0
+        public GameObject cubeTreePrefab;     // LOD 1
+
         [Header("Colors")]
         public Color playerTileColor = Color.white;
         public Color nearTileColor = Color.yellow;
@@ -94,6 +98,10 @@ namespace YOLOGRAM
             if (chunk == null)
                 chunk = chunkObj.AddComponent<Chunk>();
 
+            // Pass tree prefabs into chunk before generation
+            chunk.treeHighPrefab = cylinderTreePrefab;
+            chunk.treeLowPrefab = cubeTreePrefab;
+
             chunk.Generate(coord, this);
             spawnedChunks[coord] = chunk;
         }
@@ -125,6 +133,10 @@ namespace YOLOGRAM
                 mpb.SetColor("_BaseColor", color);
                 mpb.SetColor("_Color", color);
                 rend.SetPropertyBlock(mpb);
+
+                // LOD switching to drive tree LOD and chunk materials/mesh
+                int lod = (coord == currentChunkCoord || dist <= 1.5f) ? 0 : 1;
+                chunk.SetLOD(lod);
             }
         }
 

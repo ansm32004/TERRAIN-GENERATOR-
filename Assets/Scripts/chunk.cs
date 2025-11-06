@@ -20,6 +20,18 @@ namespace YOLOGRAM
         private int lodLevel = 0;
         private Mesh highDetailMesh; // Cache for quick LOD swaps
 
+        [Header("Trees")]
+        [Tooltip("High detail tree prefab (cylinder)")]
+        public GameObject treeHighPrefab;
+        [Tooltip("Low detail tree prefab (cube)")]
+        public GameObject treeLowPrefab;
+        [Range(0, 100)] public int minTrees = 5;
+        [Range(0, 100)] public int maxTrees = 15;
+        [Tooltip("Padding from chunk edges to avoid overlap")] public float edgePadding = 1f;
+        [Header("Density")]
+        [Range(0f, 3f)] public float treeDensity = 1f; // 1 = default, <1 fewer, >1 more
+        private System.Collections.Generic.List<Tree> spawnedTrees = new System.Collections.Generic.List<Tree>();
+
         // ---------------------------- MAIN GENERATE FUNCTION ----------------------------
         public void Generate(Vector2Int chunkCoord, TerrainManager terrainManager)
         {
@@ -49,6 +61,9 @@ namespace YOLOGRAM
                 Vector3 abovePos = transform.position + new Vector3(size / 2f, 50f, size / 2f);
                 manager.SnapPlayerToTerrain(abovePos);
             }
+
+            // Spawn trees after mesh and collider are ready
+            SpawnTrees(chunkCoord);
         }
 
         // ---------------------------- MESH GENERATION ----------------------------
@@ -132,6 +147,9 @@ namespace YOLOGRAM
             {
                 meshFilter.mesh = highDetailMesh;
             }
+
+            // Propagate LOD to trees
+            UpdateTreeLOD(lodLevel);
         }
 
         private Mesh SimplifyMesh(Mesh original)
@@ -147,6 +165,74 @@ namespace YOLOGRAM
                 Mathf.FloorToInt(pos.x / 32f),
                 Mathf.FloorToInt(pos.z / 32f)
             );
+        }
+
+        // ---------------------------- TREE SPAWNING ----------------------------
+        private void SpawnTrees(Vector2Int chunkCoord)
+        {
+            // Clear any previous trees (e.g., regen path)
+            if (spawnedTrees != null && spawnedTrees.Count > 0)
+            {
+                for (int i = 0; i < spawnedTrees.Count; i++)
+                {
+                    if (spawnedTrees[i] != null)
+                    {
+                        Destroy(spawnedTrees[i].gameObject);
+                    }
+                }
+                spawnedTrees.Clear();
+            }
+
+            if (treeHighPrefab == null || treeLowPrefab == null) return;
+
+            // Deterministic seed from chunk coordinates
+            int seed = (chunkCoord.x * 73856093) ^ (chunkCoord.y * 19349663);
+            Random.InitState(seed);
+
+            int baseCount = Random.Range(minTrees, maxTrees + 1);
+            int count = Mathf.Max(0, Mathf.RoundToInt(baseCount * treeDensity));
+
+            float halfSize = size * 0.5f;
+            float minXZ = -halfSize + edgePadding;
+            float maxXZ = halfSize - edgePadding;
+
+            for (int i = 0; i < count; i++)
+            {
+                float localX = Random.Range(minXZ, maxXZ);
+                float localZ = Random.Range(minXZ, maxXZ);
+
+                // Raycast from above to terrain to get height
+                Vector3 rayOrigin = transform.TransformPoint(new Vector3(localX, 100f, localZ));
+                Vector3 spawnPos = transform.TransformPoint(new Vector3(localX, 0f, localZ));
+                if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, 500f))
+                {
+                    spawnPos = hit.point;
+                }
+
+                float scaleJitter = Random.Range(0.8f, 1.2f);
+                float yRot = Random.Range(0f, 360f);
+
+                GameObject treeObj = new GameObject($"Tree_{i}");
+                treeObj.transform.SetParent(transform, false);
+                treeObj.transform.position = spawnPos;
+
+                Tree tree = treeObj.AddComponent<Tree>();
+                tree.Initialize(treeHighPrefab, treeLowPrefab, lodLevel, scaleJitter, yRot);
+
+                spawnedTrees.Add(tree);
+            }
+        }
+
+        private void UpdateTreeLOD(int level)
+        {
+            if (spawnedTrees == null) return;
+            for (int i = 0; i < spawnedTrees.Count; i++)
+            {
+                if (spawnedTrees[i] != null)
+                {
+                    spawnedTrees[i].SetLOD(level);
+                }
+            }
         }
     }
 }
