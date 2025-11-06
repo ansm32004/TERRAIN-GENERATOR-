@@ -5,23 +5,20 @@ namespace YOLOGRAM
 {
     public class TerrainManager : MonoBehaviour
     {
-        [Header("Chunk Setup")]
+        [Header("Chunk Settings")]
         public GameObject chunkPrefab;
         public Transform player;
-        public float chunkSize = 32f;  // Must match Chunk.size in your prefab
-        public int rowWidth = 3;       // Always 3 chunks wide (center + left + right)
-        public float spawnDistance = 50f; // How far ahead to spawn next row
+        public float chunkSize = 32f;   // match your prefab size
+        public int viewRadius = 2;      // how far around player to keep generating
 
         [Header("Colors")]
         public Color playerTileColor = Color.white;
-        public Color newRowColor = Color.yellow;
-        public Color oldRowColor = Color.blue;
+        public Color nearTileColor = Color.yellow;
+        public Color farTileColor = Color.blue;
 
-        private int nextRowIndexZ = 0;
-        private int lastGeneratedRowZ = int.MinValue;
-
-        // Keep track of all spawned chunks
         private readonly Dictionary<Vector2Int, Chunk> spawnedChunks = new();
+        private Vector2Int currentChunkCoord;
+        private Vector2Int lastChunkCoord;
 
         void Start()
         {
@@ -31,7 +28,7 @@ namespace YOLOGRAM
                 if (found != null) player = found.transform;
                 else
                 {
-                    Debug.LogError("No player assigned and no GameObject with 'Player' tag found!");
+                    Debug.LogError("TerrainManager: No Player found!");
                     enabled = false;
                     return;
                 }
@@ -39,76 +36,72 @@ namespace YOLOGRAM
 
             if (chunkPrefab == null)
             {
-                Debug.LogError("Chunk prefab is missing!");
+                Debug.LogError("TerrainManager: Chunk prefab not assigned!");
                 enabled = false;
                 return;
             }
 
-            // Initialize grid index based on player's Z position
-            nextRowIndexZ = Mathf.FloorToInt(player.position.z / chunkSize);
+            currentChunkCoord = WorldToChunkCoord(player.position);
+            lastChunkCoord = currentChunkCoord;
 
-            // Generate initial safe area (two rows)
-            GenerateRow();
-            GenerateRow();
-
-            // Snap player on top of terrain to prevent falling
+            // Generate initial grid
+            GenerateChunksAround(currentChunkCoord);
             SnapPlayerToTerrain(player.position + Vector3.up * 50f);
         }
 
         void Update()
         {
-            Vector2Int playerGrid = new Vector2Int(
-                Mathf.RoundToInt(player.position.x / chunkSize),
-                Mathf.RoundToInt(player.position.z / chunkSize)
-            );
+            if (player == null) return;
 
-            // Spawn next row if player gets close to the edge
-            float nextRowWorldZ = nextRowIndexZ * chunkSize;
-            if (player.position.z + spawnDistance > nextRowWorldZ)
+            currentChunkCoord = WorldToChunkCoord(player.position);
+
+            // Detect chunk transition
+            if (currentChunkCoord != lastChunkCoord)
             {
-                GenerateRow();
+                lastChunkCoord = currentChunkCoord;
+                GenerateChunksAround(currentChunkCoord);
             }
 
-            UpdateChunkColors(playerGrid);
+            UpdateChunkColors();
         }
 
         // --------------------------------------------------------------------
-        // Generates a new 3×1 row of chunks ahead of the player
+        // Generate all missing chunks in a square around the player
         // --------------------------------------------------------------------
-        private void GenerateRow()
+        private void GenerateChunksAround(Vector2Int center)
         {
-            int centerX = Mathf.RoundToInt(player.position.x / chunkSize);
-            int halfWidth = rowWidth / 2; // =1 for 3-wide
-
-            for (int dx = -halfWidth; dx <= halfWidth; dx++)
+            for (int x = -viewRadius; x <= viewRadius; x++)
             {
-                int tileX = centerX + dx;
-                int tileZ = nextRowIndexZ;
-
-                Vector2Int coord = new Vector2Int(tileX, tileZ);
-                if (!spawnedChunks.ContainsKey(coord))
+                for (int z = -viewRadius; z <= viewRadius; z++)
                 {
-                    // Instantiate new chunk
-                    GameObject chunkObj = Instantiate(chunkPrefab, null);
-                    chunkObj.name = $"Chunk_{coord.x}_{coord.y}";
+                    Vector2Int coord = new Vector2Int(center.x + x, center.y + z);
 
-                    Chunk chunk = chunkObj.GetComponent<Chunk>();
-                    if (chunk == null)
-                        chunk = chunkObj.AddComponent<Chunk>();
-
-                    chunk.Generate(coord, this);
-                    spawnedChunks[coord] = chunk;
+                    if (!spawnedChunks.ContainsKey(coord))
+                    {
+                        SpawnChunk(coord);
+                    }
                 }
             }
+        }
 
-            lastGeneratedRowZ = nextRowIndexZ;
-            nextRowIndexZ += 1; // Move forward one row
+        private void SpawnChunk(Vector2Int coord)
+        {
+            Vector3 worldPos = new Vector3(coord.x * chunkSize, 0, coord.y * chunkSize);
+            GameObject chunkObj = Instantiate(chunkPrefab, worldPos, Quaternion.identity);
+            chunkObj.name = $"Chunk_{coord.x}_{coord.y}";
+
+            Chunk chunk = chunkObj.GetComponent<Chunk>();
+            if (chunk == null)
+                chunk = chunkObj.AddComponent<Chunk>();
+
+            chunk.Generate(coord, this);
+            spawnedChunks[coord] = chunk;
         }
 
         // --------------------------------------------------------------------
-        // Update colors of chunks dynamically
+        // Color the chunks dynamically
         // --------------------------------------------------------------------
-        private void UpdateChunkColors(Vector2Int playerChunk)
+        private void UpdateChunkColors()
         {
             foreach (var kvp in spawnedChunks)
             {
@@ -116,30 +109,41 @@ namespace YOLOGRAM
                 Chunk chunk = kvp.Value;
                 if (chunk == null) continue;
 
-                Color targetColor = oldRowColor;
-                if (coord == playerChunk)
-                    targetColor = playerTileColor;
-                else if (coord.y == lastGeneratedRowZ)
-                    targetColor = newRowColor;
+                float dist = Vector2.Distance(coord, currentChunkCoord);
+                Color color = farTileColor;
+
+                if (coord == currentChunkCoord)
+                    color = playerTileColor;
+                else if (dist <= 1.5f)
+                    color = nearTileColor;
 
                 Renderer rend = chunk.GetComponent<Renderer>();
                 if (rend == null) continue;
 
-                MaterialPropertyBlock mpb = new MaterialPropertyBlock();
+                MaterialPropertyBlock mpb = new();
                 rend.GetPropertyBlock(mpb);
-                mpb.SetColor("_BaseColor", targetColor);
-                mpb.SetColor("_Color", targetColor);
+                mpb.SetColor("_BaseColor", color);
+                mpb.SetColor("_Color", color);
                 rend.SetPropertyBlock(mpb);
             }
         }
 
         // --------------------------------------------------------------------
-        // Keeps player positioned on top of terrain
+        // Convert world position → chunk coordinates
+        // --------------------------------------------------------------------
+        public Vector2Int WorldToChunkCoord(Vector3 worldPos)
+        {
+            int x = Mathf.FloorToInt(worldPos.x / chunkSize);
+            int z = Mathf.FloorToInt(worldPos.z / chunkSize);
+            return new Vector2Int(x, z);
+        }
+
+        // --------------------------------------------------------------------
+        // Keeps player aligned to ground (optional)
         // --------------------------------------------------------------------
         public void SnapPlayerToTerrain(Vector3 abovePos)
         {
             if (player == null) return;
-
             if (Physics.Raycast(abovePos, Vector3.down, out RaycastHit hit, 200f))
             {
                 player.position = hit.point + Vector3.up;
